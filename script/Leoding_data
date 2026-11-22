@@ -1,0 +1,263 @@
+CREATE OR REPLACE DIRECTORY crm_dir AS 'D:\data werehouse course\sql-data-warehouse-project\datasets\source_crm';
+CREATE OR REPLACE DIRECTORY erp_dir AS 'D:\data werehouse course\sql-data-warehouse-project\datasets\source_erp';
+
+GRANT READ, WRITE ON DIRECTORY crm_dir TO BRONZE
+GRANT READ, WRITE ON DIRECTORY erp_dir TO BRONZE
+GRANT CREATE PROCEDURE TO BRONZE
+
+
+-- 1. ext_crm_cust_info
+CREATE TABLE BRONZE.ext_crm_cust_info (
+    cst_id              INT,
+    cst_key             NVARCHAR2(50),
+    cst_firstname       NVARCHAR2(50),
+    cst_lastname        NVARCHAR2(50),
+    cst_marital_status  NVARCHAR2(50),
+    cst_gndr            NVARCHAR2(50),
+    cst_create_date     DATE
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY crm_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+        (
+            cst_id, cst_key, cst_firstname, cst_lastname, cst_marital_status, cst_gndr,
+            cst_create_date CHAR(25) DATE_FORMAT DATE MASK "YYYY-MM-DD"
+        )
+    )
+    LOCATION ('cust_info.csv')
+) REJECT LIMIT UNLIMITED;
+
+-- 2. ext_crm_prd_info
+CREATE TABLE BRONZE.ext_crm_prd_info (
+    prd_id       INT,
+    prd_key      NVARCHAR2(50),
+    prd_nm       NVARCHAR2(50),
+    prd_cost     INT,
+    prd_line     NVARCHAR2(50),
+    prd_start_dt DATE,
+    prd_end_dt   DATE
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY crm_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+        (
+            prd_id, prd_key, prd_nm, prd_cost, prd_line,
+            prd_start_dt CHAR(25) DATE_FORMAT DATE MASK "YYYY-MM-DD",
+            prd_end_dt   CHAR(25) DATE_FORMAT DATE MASK "YYYY-MM-DD"
+        )
+    )
+    LOCATION ('prd_info.csv')
+) REJECT LIMIT UNLIMITED;
+
+-- 3. ext_crm_sales_details
+CREATE TABLE BRONZE.ext_crm_sales_details (
+    sls_ord_num  NVARCHAR2(50),
+    sls_prd_key  NVARCHAR2(50),
+    sls_cust_id  INT,
+    sls_order_dt INT,
+    sls_ship_dt  INT,
+    sls_due_dt   INT,
+    sls_sales    INT,
+    sls_quantity INT,
+    sls_price    INT
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY crm_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+    )
+    LOCATION ('sales_details.csv')
+) REJECT LIMIT UNLIMITED;
+
+-- 4. ext_erp_loc_a101
+CREATE TABLE BRONZE.ext_erp_loc_a101 (
+    cid   NVARCHAR2(50),
+    cntry NVARCHAR2(50)
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY erp_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+    )
+    LOCATION ('LOC_A101.csv')
+) REJECT LIMIT UNLIMITED;
+
+-- 5. ext_erp_cust_az12
+CREATE TABLE BRONZE.ext_erp_cust_az12 (
+    cid   NVARCHAR2(50),
+    bdate DATE,
+    gen   NVARCHAR2(50)
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY erp_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+        (
+            cid,
+            bdate CHAR(25) DATE_FORMAT DATE MASK "YYYY-MM-DD",
+            gen
+        )
+    )
+    LOCATION ('CUST_AZ12.csv')
+) REJECT LIMIT UNLIMITED;
+
+-- 6. ext_erp_px_cat_g1v2
+CREATE TABLE BRONZE.ext_erp_px_cat_g1v2 (
+    id          NVARCHAR2(50),
+    cat         NVARCHAR2(50),
+    subcat      NVARCHAR2(50),
+    maintenance NVARCHAR2(50)
+)
+ORGANIZATION EXTERNAL (
+    TYPE ORACLE_LOADER
+    DEFAULT DIRECTORY erp_dir
+    ACCESS PARAMETERS (
+        RECORDS DELIMITED BY NEWLINE
+        SKIP 1
+        FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+        MISSING FIELD VALUES ARE NULL
+    )
+    LOCATION ('PX_CAT_G1V2.csv')
+) REJECT LIMIT UNLIMITED;
+CREATE OR REPLACE PROCEDURE bronze.load_bronze AS
+    v_start_time       TIMESTAMP;
+    v_end_time         TIMESTAMP;
+    v_batch_start_time TIMESTAMP;
+    v_batch_end_time   TIMESTAMP;
+
+    FUNCTION diff_seconds(p_start TIMESTAMP, p_end TIMESTAMP) RETURN NUMBER IS
+        v_diff INTERVAL DAY TO SECOND;
+    BEGIN
+        v_diff := p_end - p_start;
+        RETURN ROUND(
+            EXTRACT(DAY FROM v_diff) * 86400 +
+            EXTRACT(HOUR FROM v_diff) * 3600 +
+            EXTRACT(MINUTE FROM v_diff) * 60 +
+            EXTRACT(SECOND FROM v_diff),
+            2
+        );
+    END diff_seconds;
+BEGIN
+    v_batch_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('================================================');
+    DBMS_OUTPUT.PUT_LINE('Loading Bronze Layer');
+    DBMS_OUTPUT.PUT_LINE('================================================');
+
+    DBMS_OUTPUT.PUT_LINE('------------------------------------------------');
+    DBMS_OUTPUT.PUT_LINE('Loading CRM Tables');
+    DBMS_OUTPUT.PUT_LINE('------------------------------------------------');
+
+    -- 1. crm_cust_info
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.crm_cust_info');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.crm_cust_info';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.crm_cust_info');
+    INSERT INTO bronze.crm_cust_info
+    SELECT * FROM bronze.ext_crm_cust_info;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    -- 2. crm_prd_info
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.crm_prd_info');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.crm_prd_info';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.crm_prd_info');
+    INSERT INTO bronze.crm_prd_info
+    SELECT * FROM bronze.ext_crm_prd_info;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    -- 3. crm_sales_details
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.crm_sales_details');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.crm_sales_details';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.crm_sales_details');
+    INSERT INTO bronze.crm_sales_details
+    SELECT * FROM bronze.ext_crm_sales_details;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    DBMS_OUTPUT.PUT_LINE('------------------------------------------------');
+    DBMS_OUTPUT.PUT_LINE('Loading ERP Tables');
+    DBMS_OUTPUT.PUT_LINE('------------------------------------------------');
+
+    -- 4. erp_loc_a101
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.erp_loc_a101');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.erp_loc_a101';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.erp_loc_a101');
+    INSERT INTO bronze.erp_loc_a101
+    SELECT * FROM bronze.ext_erp_loc_a101;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    -- 5. erp_cust_az12
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.erp_cust_az12');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.erp_cust_az12';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.erp_cust_az12');
+    INSERT INTO bronze.erp_cust_az12
+    SELECT * FROM bronze.ext_erp_cust_az12;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    -- 6. erp_px_cat_g1v2
+    v_start_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Truncating Table: bronze.erp_px_cat_g1v2');
+    EXECUTE IMMEDIATE 'TRUNCATE TABLE bronze.erp_px_cat_g1v2';
+    DBMS_OUTPUT.PUT_LINE('>> Inserting Data Into: bronze.erp_px_cat_g1v2');
+    INSERT INTO bronze.erp_px_cat_g1v2
+    SELECT * FROM bronze.ext_erp_px_cat_g1v2;
+    COMMIT;
+    v_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('>> Load Duration: ' || diff_seconds(v_start_time, v_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('>> -------------');
+
+    v_batch_end_time := SYSTIMESTAMP;
+    DBMS_OUTPUT.PUT_LINE('==========================================');
+    DBMS_OUTPUT.PUT_LINE('Loading Bronze Layer is Completed');
+    DBMS_OUTPUT.PUT_LINE('   - Total Load Duration: ' || diff_seconds(v_batch_start_time, v_batch_end_time) || ' seconds');
+    DBMS_OUTPUT.PUT_LINE('==========================================');
+
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('==========================================');
+        DBMS_OUTPUT.PUT_LINE('ERROR OCCURRED DURING LOADING BRONZE LAYER');
+        DBMS_OUTPUT.PUT_LINE('Error Code: ' || SQLCODE);
+        DBMS_OUTPUT.PUT_LINE('Error Message: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('==========================================');
+END load_bronze;
+/
